@@ -80,9 +80,22 @@ export default function HomeScreen() {
             }}
             className="rounded-xl border border-zinc-200 bg-white p-4 active:bg-zinc-100"
           >
-            <Text className="text-base font-semibold text-zinc-900" numberOfLines={1}>
-              {item.name}
-            </Text>
+            <View className="flex-row items-center">
+              <Text
+                className="flex-1 text-base font-semibold text-zinc-900"
+                numberOfLines={1}
+              >
+                {item.name}
+              </Text>
+              {item.sync_status !== 'synced' && (
+                <View className="ml-2 flex-row items-center">
+                  <View className="mr-1 h-1.5 w-1.5 rounded-full bg-amber-500" />
+                  <Text className="text-[10px] text-amber-600">
+                    {item.sync_status === 'failed' ? '同步失败' : '待同步'}
+                  </Text>
+                </View>
+              )}
+            </View>
             <View className="mt-1 flex-row items-center justify-between">
               <Text className="flex-1 text-sm text-zinc-500" numberOfLines={1}>
                 {item.museum ?? '未填博物馆'}

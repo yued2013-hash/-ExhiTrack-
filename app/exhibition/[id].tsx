@@ -62,6 +62,27 @@ export default function ExhibitionDetailScreen() {
       <View className="rounded-xl border border-zinc-200 bg-white p-5">
         <Text className="text-2xl font-bold text-zinc-900">{data.name}</Text>
 
+        {data.sync_status !== 'synced' && (
+          <View
+            className={`mt-2 flex-row items-center self-start rounded-full px-2.5 py-1 ${
+              data.sync_status === 'failed' ? 'bg-red-50' : 'bg-amber-50'
+            }`}
+          >
+            <View
+              className={`mr-1.5 h-1.5 w-1.5 rounded-full ${
+                data.sync_status === 'failed' ? 'bg-red-500' : 'bg-amber-500'
+              }`}
+            />
+            <Text
+              className={`text-xs ${
+                data.sync_status === 'failed' ? 'text-red-700' : 'text-amber-700'
+              }`}
+            >
+              {data.sync_status === 'failed' ? '同步失败' : '待同步至云端'}
+            </Text>
+          </View>
+        )}
+
         <View className="mt-5 gap-3">
           <Field label="博物馆" value={data.museum ?? '—'} />
           <Field label="观展日期" value={data.visit_date ?? '—'} />
