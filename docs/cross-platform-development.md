@@ -123,7 +123,25 @@ git config --global core.autocrlf input
 
 ## 四、Windows 使用 GitHub 拉取并运行项目
 
-首次在 Windows 拉取项目：
+当前 Linux 工作区已推送到 GitHub 仓库的 `master` 分支。Windows 上要使用这批最新文件，应显式拉取 `master` 分支，而不是默认分支：
+
+```powershell
+cd C:\dev
+git clone -b master git@github.com:yued2013-hash/-ExhiTrack-.git zhanji
+cd zhanji
+pnpm install --frozen-lockfile
+```
+
+如果 Windows 没有配置 GitHub SSH key，也可以用 HTTPS：
+
+```powershell
+cd C:\dev
+git clone -b master https://github.com/yued2013-hash/-ExhiTrack-.git zhanji
+cd zhanji
+pnpm install --frozen-lockfile
+```
+
+其他仓库或后续更换默认分支时，可以参考这个通用模板：
 
 ```powershell
 cd C:\dev
@@ -274,4 +292,3 @@ eas build --profile development --platform android
 ```powershell
 pnpm exec expo start --dev-client
 ```
-
