@@ -76,14 +76,37 @@ export async function createExhibition(input: ExhibitionInsert): Promise<Exhibit
 export async function softDeleteExhibition(id: string): Promise<void> {
   const db = await getDb();
   const now = new Date().toISOString();
-  await db.runAsync(
-    `UPDATE exhibitions
-       SET deleted_at = ?, updated_at = ?, sync_status = 'pending'
-     WHERE id = ?`,
-    now,
-    now,
-    id,
-  );
+  await db.execAsync('BEGIN');
+  try {
+    await db.runAsync(
+      `UPDATE exhibitions
+         SET deleted_at = ?, updated_at = ?, sync_status = 'pending'
+       WHERE id = ?`,
+      now,
+      now,
+      id,
+    );
+    await db.runAsync(
+      `UPDATE artifacts
+         SET deleted_at = ?, updated_at = ?, sync_status = 'pending'
+       WHERE exhibition_id = ? AND deleted_at IS NULL`,
+      now,
+      now,
+      id,
+    );
+    await db.runAsync(
+      `UPDATE impressions
+         SET deleted_at = ?, updated_at = ?, sync_status = 'pending'
+       WHERE exhibition_id = ? AND deleted_at IS NULL`,
+      now,
+      now,
+      id,
+    );
+    await db.execAsync('COMMIT');
+  } catch (e) {
+    await db.execAsync('ROLLBACK');
+    throw e;
+  }
 }
 
 export async function countPendingSync(userId: string): Promise<SyncCounts> {

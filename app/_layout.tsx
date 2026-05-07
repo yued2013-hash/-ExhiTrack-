@@ -1,6 +1,8 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import Constants from 'expo-constants';
+import { type Href, Stack, useRouter, useSegments } from 'expo-router';
+import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
@@ -14,6 +16,8 @@ import { useSyncEngine } from '@/lib/sync/useSyncEngine';
 export const unstable_settings = {
   anchor: '(tabs)',
 };
+
+const IMPORT_ROUTE = '/import' as Href;
 
 function useAuthRedirect() {
   const { session, ready } = useSession();
@@ -36,6 +40,7 @@ function RootLayoutInner() {
   const { ready } = useSession();
   useAuthRedirect();
   useSyncEngine();
+  useSharedImportRedirect();
 
   if (!ready) return null;
 
@@ -49,21 +54,43 @@ function RootLayoutInner() {
           options={{ presentation: 'modal', title: '新建展览' }}
         />
         <Stack.Screen name="exhibition/[id]" options={{ title: '展览详情' }} />
+        <Stack.Screen name="import" options={{ title: '导入照片' }} />
       </Stack>
       <StatusBar style="auto" />
     </ThemeProvider>
   );
 }
 
+function useSharedImportRedirect() {
+  const router = useRouter();
+  const segments = useSegments();
+  const { hasShareIntent, shareIntent } = useShareIntentContext();
+
+  useEffect(() => {
+    if (!hasShareIntent) return;
+    const hasImages = shareIntent.files?.some((file) =>
+      file.mimeType?.startsWith('image/'),
+    );
+    if (!hasImages || String(segments[0]) === 'import') return;
+    router.push(IMPORT_ROUTE);
+  }, [hasShareIntent, router, segments, shareIntent.files]);
+}
+
 export default function RootLayout() {
+  const shareIntentDisabled = Constants.appOwnership === 'expo';
+
   return (
-    <PersistQueryClientProvider
-      client={queryClient}
-      persistOptions={{ persister: asyncStoragePersister, buster: 'v2-localfirst' }}
+    <ShareIntentProvider
+      options={{ disabled: shareIntentDisabled, scheme: 'exhitrack' }}
     >
-      <AuthProvider>
-        <RootLayoutInner />
-      </AuthProvider>
-    </PersistQueryClientProvider>
+      <PersistQueryClientProvider
+        client={queryClient}
+        persistOptions={{ persister: asyncStoragePersister, buster: 'v2-localfirst' }}
+      >
+        <AuthProvider>
+          <RootLayoutInner />
+        </AuthProvider>
+      </PersistQueryClientProvider>
+    </ShareIntentProvider>
   );
 }

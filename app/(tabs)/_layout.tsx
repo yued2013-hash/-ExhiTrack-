@@ -35,7 +35,7 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen name="library" options={{ title: '文博库' }} />
-      <Tabs.Screen name="capture" options={{ title: '拍摄' }} />
+      <Tabs.Screen name="capture" options={{ title: '拍摄', headerShown: false }} />
       <Tabs.Screen name="profile" options={{ title: '我的' }} />
     </Tabs>
   );

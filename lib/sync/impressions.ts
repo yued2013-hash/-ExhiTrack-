@@ -1,22 +1,26 @@
 import {
-  listAllExhibitions,
-  listPendingExhibitions,
-  markLocallyDeleted,
-  markSyncFailed,
-  markSynced,
-  resetSyncStateToRetry,
-  upsertExhibitionFromCloud,
-  type CloudExhibition,
-  type ExhibitionRow,
-} from '@/lib/db/exhibitions';
+  countPendingImpressions,
+  listAllImpressionsForUser,
+  listPendingImpressions,
+  markImpressionLocallyDeleted,
+  markImpressionSyncFailed,
+  markImpressionSynced,
+  resetImpressionSyncStateToRetry,
+  setImpressionCloudUrl,
+  upsertImpressionFromCloud,
+  type CloudImpression,
+  type ImpressionRow,
+} from '@/lib/db/impressions';
 import { toError } from '@/lib/errors';
 import { supabase } from '@/lib/supabase';
 
-const MAX_RETRIES = 3;
-// Min ms since last attempt before re-trying. Index = retry_count BEFORE this attempt.
-const BACKOFF_MS = [0, 5_000, 30_000];
+import { removeFromStorage, uploadFileToStorage } from './storage';
 
-export type SyncResult = {
+const MAX_RETRIES = 3;
+const BACKOFF_MS = [0, 5_000, 30_000];
+const VOICES_BUCKET = 'voices';
+
+export type ImpressionSyncResult = {
   attempted: number;
   succeeded: number;
   failed: number;
@@ -24,7 +28,7 @@ export type SyncResult = {
   networkErrors: number;
 };
 
-export type PullResult = {
+export type ImpressionPullResult = {
   fetched: number;
   inserted: number;
   updatedFromCloud: number;
@@ -45,7 +49,7 @@ function isNetworkError(e: unknown): boolean {
   );
 }
 
-function shouldAttemptNow(row: ExhibitionRow, now: number): boolean {
+function shouldAttemptNow(row: ImpressionRow, now: number): boolean {
   if (row.retry_count >= MAX_RETRIES) return false;
   if (!row.last_attempt_at) return true;
   const elapsed = now - new Date(row.last_attempt_at).getTime();
@@ -53,55 +57,68 @@ function shouldAttemptNow(row: ExhibitionRow, now: number): boolean {
   return elapsed >= required;
 }
 
-async function pushOne(row: ExhibitionRow): Promise<void> {
+function voiceCloudPath(row: ImpressionRow): string {
+  return `${row.user_id}/${row.exhibition_id}/${row.id}.m4a`;
+}
+
+async function pushOne(row: ImpressionRow): Promise<void> {
   if (row.deleted_at) {
-    // .select() forces PostgREST to return the deleted rows, so we can verify
-    // the delete actually hit a row. Without this, RLS-filtered no-ops succeed
-    // silently and we'd incorrectly mark synced.
+    await removeFromStorage(VOICES_BUCKET, [voiceCloudPath(row)]);
     const { data, error } = await supabase
-      .from('exhibitions')
+      .from('impressions')
       .delete()
       .eq('id', row.id)
       .select();
     if (error) throw toError(error);
     if (!data || data.length === 0) {
-      // No row matched. Either it was already deleted (idempotent — fine) or
-      // RLS denied us (real problem). Treat already-deleted as success.
       const { data: probe, error: probeErr } = await supabase
-        .from('exhibitions')
+        .from('impressions')
         .select('id')
         .eq('id', row.id);
       if (probeErr) throw toError(probeErr);
       if (probe && probe.length > 0) {
-        throw new Error(
-          `删除被拒绝（RLS 或 id 不匹配）：行 ${row.id} 仍存在于云端`,
-        );
+        throw new Error(`录音删除被拒绝(RLS 或 id 不匹配):${row.id} 仍存在于云端`);
       }
-      // Row truly absent on cloud — accept as deleted.
     }
     return;
   }
-  const { error } = await supabase.from('exhibitions').upsert({
+
+  let voiceUrl = row.voice_cloud_url;
+  if (!voiceUrl) {
+    voiceUrl = await uploadFileToStorage(
+      VOICES_BUCKET,
+      row.voice_local_path,
+      voiceCloudPath(row),
+      'audio/m4a',
+    );
+    await setImpressionCloudUrl(row.id, voiceUrl);
+  }
+
+  const { error } = await supabase.from('impressions').upsert({
     id: row.id,
     user_id: row.user_id,
-    name: row.name,
-    museum: row.museum,
-    visit_date: row.visit_date,
+    exhibition_id: row.exhibition_id,
+    artifact_id: row.artifact_id,
+    voice_url: voiceUrl,
+    voice_duration_ms: row.voice_duration_ms,
+    raw_text: row.raw_text,
+    polished_text: row.polished_text,
+    recorded_at: row.recorded_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   });
   if (error) throw toError(error);
 }
 
-export async function pushPendingExhibitions(
+export async function pushPendingImpressions(
   userId: string,
   opts: { force?: boolean } = {},
-): Promise<SyncResult> {
+): Promise<ImpressionSyncResult> {
   const { force = false } = opts;
-  const rows = await listPendingExhibitions(userId);
-  console.log(`[sync] pushPendingExhibitions: ${rows.length} candidate rows`);
+  const rows = await listPendingImpressions(userId);
+  console.log(`[sync.impressions] ${rows.length} candidate rows`);
   const now = Date.now();
-  const result: SyncResult = {
+  const result: ImpressionSyncResult = {
     attempted: 0,
     succeeded: 0,
     failed: 0,
@@ -112,32 +129,28 @@ export async function pushPendingExhibitions(
   for (const row of rows) {
     if (!force && !shouldAttemptNow(row, now)) {
       result.skipped++;
-      console.log(`[sync]   skip ${row.id} (retry=${row.retry_count}, backoff)`);
       continue;
     }
     result.attempted++;
     try {
       await pushOne(row);
-      await markSynced(row.id);
+      await markImpressionSynced(row.id);
       result.succeeded++;
-      console.log(`[sync]   ✓ pushed ${row.id} (${row.name})`);
+      console.log(`[sync.impressions]   ✓ pushed ${row.id}`);
     } catch (e) {
       const err = toError(e);
       const errMsg = err.message;
       if (isNetworkError(err)) {
-        // Network failure: don't bump retry. We'll retry on next trigger.
         result.networkErrors++;
-        console.warn(`[sync]   ⚠ network error on ${row.id}: ${errMsg}`);
-        // Still update last_attempt_at to throttle hot loops
-        await markSyncFailed(row.id, errMsg, row.retry_count, 'pending');
+        await markImpressionSyncFailed(row.id, errMsg, row.retry_count, 'pending');
+        console.warn(`[sync.impressions]   ⚠ network ${row.id}: ${errMsg}`);
       } else {
-        // Server / data error: bump retry count.
         const newRetry = row.retry_count + 1;
         const status = newRetry >= MAX_RETRIES ? 'failed' : 'pending';
-        await markSyncFailed(row.id, errMsg, newRetry, status);
+        await markImpressionSyncFailed(row.id, errMsg, newRetry, status);
         result.failed++;
         console.warn(
-          `[sync]   ✗ server error on ${row.id} (retry ${newRetry}/${MAX_RETRIES}, status=${status}): ${errMsg}`,
+          `[sync.impressions]   ✗ ${row.id} retry ${newRetry}/${MAX_RETRIES} status=${status}: ${errMsg}`,
         );
       }
     }
@@ -146,23 +159,23 @@ export async function pushPendingExhibitions(
   return result;
 }
 
-/**
- * Pull cloud state into local SQLite. Only handles 'synced' local rows;
- * pending/failed local rows are owned by push-sync and left alone.
- */
-export async function pullExhibitions(userId: string): Promise<PullResult> {
+export async function pullImpressions(
+  userId: string,
+): Promise<ImpressionPullResult> {
   const { data, error } = await supabase
-    .from('exhibitions')
-    .select('id, user_id, name, museum, visit_date, created_at, updated_at')
+    .from('impressions')
+    .select(
+      'id, user_id, exhibition_id, artifact_id, voice_url, voice_duration_ms, raw_text, polished_text, recorded_at, created_at, updated_at',
+    )
     .eq('user_id', userId);
   if (error) throw toError(error);
-  const cloudRows: CloudExhibition[] = data ?? [];
+  const cloudRows: CloudImpression[] = data ?? [];
 
-  const localRows = await listAllExhibitions(userId);
+  const localRows = await listAllImpressionsForUser(userId);
   const localById = new Map(localRows.map((r) => [r.id, r]));
   const cloudIds = new Set(cloudRows.map((r) => r.id));
 
-  const result: PullResult = {
+  const result: ImpressionPullResult = {
     fetched: cloudRows.length,
     inserted: 0,
     updatedFromCloud: 0,
@@ -174,25 +187,24 @@ export async function pullExhibitions(userId: string): Promise<PullResult> {
   for (const cloud of cloudRows) {
     const local = localById.get(cloud.id);
     if (!local) {
-      await upsertExhibitionFromCloud(cloud);
+      await upsertImpressionFromCloud(cloud);
       result.inserted++;
       continue;
     }
     if (local.deleted_at && local.sync_status === 'synced') {
-      // Local thinks deleted but cloud still has it (a previous delete
-      // silently no-op'd). Reset to pending so push retries with the
-      // batch 2.2 .select() verification.
-      await resetSyncStateToRetry(local.id);
+      await resetImpressionSyncStateToRetry(local.id);
       result.resyncedDelete++;
       continue;
     }
     if (local.sync_status !== 'synced') {
-      // Push-sync owns this row.
       result.unchanged++;
       continue;
     }
-    if (new Date(cloud.updated_at).getTime() > new Date(local.updated_at).getTime()) {
-      await upsertExhibitionFromCloud(cloud);
+    if (
+      new Date(cloud.updated_at).getTime() >
+      new Date(local.updated_at).getTime()
+    ) {
+      await upsertImpressionFromCloud(cloud);
       result.updatedFromCloud++;
     } else {
       result.unchanged++;
@@ -202,11 +214,12 @@ export async function pullExhibitions(userId: string): Promise<PullResult> {
   for (const local of localRows) {
     if (cloudIds.has(local.id)) continue;
     if (local.sync_status !== 'synced') continue;
-    if (local.deleted_at) continue; // already aligned (both gone)
-    // Cloud lost this row → another device deleted it.
-    await markLocallyDeleted(local.id);
+    if (local.deleted_at) continue;
+    await markImpressionLocallyDeleted(local.id);
     result.locallyDeleted++;
   }
 
   return result;
 }
+
+export { countPendingImpressions };

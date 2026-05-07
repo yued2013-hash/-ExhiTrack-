@@ -30,6 +30,90 @@ export const MIGRATIONS: Array<(db: SQLiteDatabase) => Promise<void>> = [
       ALTER TABLE exhibitions ADD COLUMN last_attempt_at TEXT;
     `);
   },
+
+  // v2 → v3: artifacts table (one record per captured photo)
+  async (db) => {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS artifacts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        exhibition_id TEXT NOT NULL,
+        photo_local_path TEXT NOT NULL,
+        thumbnail_local_path TEXT,
+        photo_taken_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        sync_status TEXT NOT NULL DEFAULT 'pending',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        last_attempt_at TEXT,
+        FOREIGN KEY (exhibition_id) REFERENCES exhibitions(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_artifacts_user_id ON artifacts(user_id);
+      CREATE INDEX IF NOT EXISTS idx_artifacts_exhibition_id ON artifacts(exhibition_id);
+      CREATE INDEX IF NOT EXISTS idx_artifacts_sync_status ON artifacts(sync_status);
+      CREATE INDEX IF NOT EXISTS idx_artifacts_deleted_at ON artifacts(deleted_at);
+    `);
+  },
+
+  // v3 → v4: artifacts.group_id for multi-shot grouping
+  async (db) => {
+    await db.execAsync(`
+      ALTER TABLE artifacts ADD COLUMN group_id TEXT;
+      CREATE INDEX IF NOT EXISTS idx_artifacts_group_id ON artifacts(group_id);
+    `);
+  },
+
+  // v4 → v5: impressions table (voice notes, optionally bound to an artifact)
+  async (db) => {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS impressions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        exhibition_id TEXT NOT NULL,
+        artifact_id TEXT,
+        voice_local_path TEXT NOT NULL,
+        voice_duration_ms INTEGER NOT NULL DEFAULT 0,
+        raw_text TEXT,
+        polished_text TEXT,
+        recorded_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        sync_status TEXT NOT NULL DEFAULT 'pending',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        last_attempt_at TEXT,
+        FOREIGN KEY (exhibition_id) REFERENCES exhibitions(id) ON DELETE CASCADE,
+        FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE SET NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_impressions_user_id ON impressions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_impressions_exhibition_id ON impressions(exhibition_id);
+      CREATE INDEX IF NOT EXISTS idx_impressions_artifact_id ON impressions(artifact_id);
+      CREATE INDEX IF NOT EXISTS idx_impressions_sync_status ON impressions(sync_status);
+      CREATE INDEX IF NOT EXISTS idx_impressions_deleted_at ON impressions(deleted_at);
+    `);
+  },
+
+  // v5 → v6: cloud URLs cached locally so push doesn't re-upload files.
+  async (db) => {
+    await db.execAsync(`
+      ALTER TABLE artifacts ADD COLUMN photo_cloud_url TEXT;
+      ALTER TABLE artifacts ADD COLUMN thumbnail_cloud_url TEXT;
+      ALTER TABLE impressions ADD COLUMN voice_cloud_url TEXT;
+    `);
+  },
+
+  // v6 → v7: EXIF metadata for imported photos.
+  async (db) => {
+    await db.execAsync(`
+      ALTER TABLE artifacts ADD COLUMN latitude REAL;
+      ALTER TABLE artifacts ADD COLUMN longitude REAL;
+      ALTER TABLE artifacts ADD COLUMN imported_from TEXT;
+      CREATE INDEX IF NOT EXISTS idx_artifacts_photo_taken_at ON artifacts(photo_taken_at);
+    `);
+  },
 ];
 
 export async function runMigrations(db: SQLiteDatabase): Promise<void> {

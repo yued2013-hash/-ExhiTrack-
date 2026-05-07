@@ -9,7 +9,8 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.linkerhand.exhitrack"
     },
     "android": {
       "package": "com.linkerhand.exhitrack",
@@ -20,7 +21,11 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
     },
     "web": {
       "output": "static",
@@ -28,6 +33,20 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-share-intent",
+        {
+          "iosActivationRules": {
+            "NSExtensionActivationSupportsImageWithMaxCount": 50
+          },
+          "androidIntentFilters": [
+            "image/*"
+          ],
+          "androidMultiIntentFilters": [
+            "image/*"
+          ]
+        }
+      ],
       [
         "expo-splash-screen",
         {
@@ -40,11 +59,19 @@
           }
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3cee78ed-ebba-4491-8f28-775098ded390"
+      }
+    },
+    "owner": "dynasty16"
   }
 }

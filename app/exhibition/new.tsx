@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { z } from 'zod';
 
+import { setActiveExhibitionId } from '@/lib/active-exhibition';
 import { formatError } from '@/lib/errors';
 import { useCreateExhibition } from '@/lib/queries/exhibitions';
 
@@ -49,11 +50,14 @@ export default function NewExhibitionScreen() {
   const onSubmit = handleSubmit(async (data) => {
     setErrorMsg(null);
     try {
-      await createMutation.mutateAsync({
+      const created = await createMutation.mutateAsync({
         name: data.name.trim(),
         museum: data.museum?.trim() ?? null,
         visit_date: data.visit_date || null,
       });
+      // Auto-select the new exhibition for capture, so the user goes straight
+      // to shooting into it without an extra switcher tap.
+      await setActiveExhibitionId(created.id);
       router.back();
     } catch (e: unknown) {
       console.error('[create-exhibition]', e, (e as { cause?: unknown })?.cause);

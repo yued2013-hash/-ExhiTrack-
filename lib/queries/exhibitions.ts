@@ -2,6 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useUserId } from '@/lib/auth';
 import {
+  countPendingArtifacts,
+  listArtifactSyncProblems,
+  type ArtifactSyncCounts,
+  type ArtifactSyncProblem,
+} from '@/lib/db/artifacts';
+import {
   countPendingSync,
   createExhibition,
   getExhibition,
@@ -10,6 +16,12 @@ import {
   type ExhibitionRow,
   type SyncCounts,
 } from '@/lib/db/exhibitions';
+import {
+  countPendingImpressions,
+  listImpressionSyncProblems,
+  type ImpressionSyncCounts,
+  type ImpressionSyncProblem,
+} from '@/lib/db/impressions';
 import { toError } from '@/lib/errors';
 import { runManualSync, runSync } from '@/lib/sync';
 
@@ -63,13 +75,57 @@ export function useExhibition(id: string | undefined) {
   });
 }
 
+export type AggregateSyncCounts = {
+  exhibitions: SyncCounts;
+  artifacts: ArtifactSyncCounts;
+  impressions: ImpressionSyncCounts;
+  artifactProblems: ArtifactSyncProblem[];
+  impressionProblems: ImpressionSyncProblem[];
+  totalPending: number;
+  totalFailed: number;
+};
+
 export function useSyncStatusCounts() {
   const userId = useUserId();
   return useQuery({
     queryKey: syncCountsKey(userId),
-    queryFn: async (): Promise<SyncCounts> => {
-      if (!userId) return { pending: 0, failed: 0 };
-      return countPendingSync(userId);
+    queryFn: async (): Promise<AggregateSyncCounts> => {
+      if (!userId) {
+        const empty = { pending: 0, failed: 0 };
+        return {
+          exhibitions: empty,
+          artifacts: empty,
+          impressions: empty,
+          artifactProblems: [],
+          impressionProblems: [],
+          totalPending: 0,
+          totalFailed: 0,
+        };
+      }
+      const [
+        exhibitions,
+        artifacts,
+        impressions,
+        artifactProblems,
+        impressionProblems,
+      ] = await Promise.all([
+        countPendingSync(userId),
+        countPendingArtifacts(userId),
+        countPendingImpressions(userId),
+        listArtifactSyncProblems(userId),
+        listImpressionSyncProblems(userId),
+      ]);
+      return {
+        exhibitions,
+        artifacts,
+        impressions,
+        artifactProblems,
+        impressionProblems,
+        totalPending:
+          exhibitions.pending + artifacts.pending + impressions.pending,
+        totalFailed:
+          exhibitions.failed + artifacts.failed + impressions.failed,
+      };
     },
     enabled: !!userId,
   });
@@ -132,7 +188,14 @@ export function useDeleteExhibition() {
 
 export function useManualSync() {
   const userId = useUserId();
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: async () => runManualSync(userId),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ROOT });
+      qc.invalidateQueries({ queryKey: ['artifacts'] });
+      qc.invalidateQueries({ queryKey: ['impressions'] });
+      qc.invalidateQueries({ queryKey: SYNC_ROOT });
+    },
   });
 }

@@ -1,6 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import * as Haptics from 'expo-haptics';
 import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -33,7 +32,6 @@ export function TabBar({ state, navigation }: BottomTabBarProps) {
         const isFocused = state.index === index;
 
         const onPress = () => {
-          Haptics.selectionAsync().catch(() => {});
           const event = navigation.emit({
             type: 'tabPress',
             target: route.key,
@@ -46,15 +44,22 @@ export function TabBar({ state, navigation }: BottomTabBarProps) {
 
         if (route.name === 'capture') {
           return (
-            <Pressable
+            <View
               key={route.key}
-              onPress={onPress}
               className="flex-1 items-center justify-end pb-1"
               style={{ overflow: 'visible' }}
             >
-              <View
-                className="-mt-7 h-14 w-14 items-center justify-center rounded-full bg-emerald-700 active:bg-emerald-800"
+              {/* The Pressable IS the visible circle — hit area === what you see */}
+              <Pressable
+                onPress={onPress}
+                className="items-center justify-center rounded-full bg-emerald-700 active:bg-emerald-800"
                 style={{
+                  position: 'absolute',
+                  top: -28,
+                  left: '50%',
+                  marginLeft: -32,
+                  width: 64,
+                  height: 64,
                   elevation: 6,
                   shadowColor: '#000',
                   shadowOpacity: 0.18,
@@ -62,10 +67,10 @@ export function TabBar({ state, navigation }: BottomTabBarProps) {
                   shadowOffset: { width: 0, height: 3 },
                 }}
               >
-                <Ionicons name="camera" size={26} color="#fff" />
-              </View>
-              <Text className="mt-1 text-[10px] text-zinc-500">{meta.label}</Text>
-            </Pressable>
+                <Ionicons name="camera" size={28} color="#fff" />
+              </Pressable>
+              <Text className="text-[10px] text-zinc-500">{meta.label}</Text>
+            </View>
           );
         }
 

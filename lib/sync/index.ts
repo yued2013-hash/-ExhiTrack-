@@ -1,19 +1,33 @@
 import NetInfo from '@react-native-community/netinfo';
 import { AppState, type AppStateStatus } from 'react-native';
 
+import { resetFailedArtifactRetries } from '@/lib/db/artifacts';
 import { resetFailedRetries } from '@/lib/db/exhibitions';
+import { resetFailedImpressionRetries } from '@/lib/db/impressions';
 import { queryClient } from '@/lib/queryClient';
 
+import {
+  pullArtifacts,
+  pushPendingArtifacts,
+} from './artifacts';
 import {
   pullExhibitions,
   pushPendingExhibitions,
   type PullResult,
   type SyncResult,
 } from './exhibitions';
+import {
+  pullImpressions,
+  pushPendingImpressions,
+} from './impressions';
 
 let running = false;
+let currentRun: Promise<RunSyncOutcome | null> | null = null;
+let currentStartedAt = 0;
 
-export type RunSyncOptions = { pull?: boolean };
+const ACTIVE_SYNC_WAIT_MS = 5_000;
+
+export type RunSyncOptions = { pull?: boolean; force?: boolean };
 
 export type RunSyncOutcome = {
   push: SyncResult | null;
@@ -22,6 +36,8 @@ export type RunSyncOutcome = {
 
 function invalidateSyncRelated() {
   queryClient.invalidateQueries({ queryKey: ['exhibitions'] });
+  queryClient.invalidateQueries({ queryKey: ['artifacts'] });
+  queryClient.invalidateQueries({ queryKey: ['impressions'] });
   queryClient.invalidateQueries({ queryKey: ['sync-status'] });
 }
 
@@ -29,8 +45,26 @@ export async function runSync(
   userId: string | undefined,
   opts: RunSyncOptions = {},
 ): Promise<RunSyncOutcome | null> {
-  const { pull = true } = opts;
-  console.log('[sync] runSync called', { userId, running, pull });
+  if (currentRun) {
+    console.log('[sync] join existing run');
+    return currentRun;
+  }
+  currentStartedAt = Date.now();
+  currentRun = runSyncInternal(userId, opts);
+  try {
+    return await currentRun;
+  } finally {
+    currentRun = null;
+    currentStartedAt = 0;
+  }
+}
+
+async function runSyncInternal(
+  userId: string | undefined,
+  opts: RunSyncOptions = {},
+): Promise<RunSyncOutcome | null> {
+  const { pull = true, force = false } = opts;
+  console.log('[sync] runSync called', { userId, running, pull, force });
   if (!userId) {
     console.log('[sync] skip: no userId');
     return null;
@@ -52,18 +86,34 @@ export async function runSync(
       return null;
     }
 
-    const pushResult = await pushPendingExhibitions(userId);
-    console.log('[sync] push result', pushResult);
+    // Push order: exhibitions → artifacts → impressions
+    // (artifact rows reference exhibition_id; impression rows reference both)
+    const pushResult = await pushPendingExhibitions(userId, { force });
+    console.log('[sync] push exhibitions', pushResult);
+    const artifactsPush = await pushPendingArtifacts(userId, { force });
+    console.log('[sync] push artifacts', artifactsPush);
+    const impressionsPush = await pushPendingImpressions(userId, { force });
+    console.log('[sync] push impressions', impressionsPush);
 
     let pullResult: PullResult | null = null;
     if (pull) {
       pullResult = await pullExhibitions(userId);
-      console.log('[sync] pull result', pullResult);
-      // If pull surfaced rows that need pushing (e.g. resynced deletes),
-      // do one more push pass.
-      if (pullResult.resyncedDelete > 0) {
-        const followup = await pushPendingExhibitions(userId);
-        console.log('[sync] followup push after pull', followup);
+      console.log('[sync] pull exhibitions', pullResult);
+      const artifactsPull = await pullArtifacts(userId);
+      console.log('[sync] pull artifacts', artifactsPull);
+      const impressionsPull = await pullImpressions(userId);
+      console.log('[sync] pull impressions', impressionsPull);
+
+      // If any pull surfaced resynced-deletes, push once more to drain them.
+      const needsFollowup =
+        pullResult.resyncedDelete > 0 ||
+        artifactsPull.resyncedDelete > 0 ||
+        impressionsPull.resyncedDelete > 0;
+      if (needsFollowup) {
+        await pushPendingExhibitions(userId, { force });
+        await pushPendingArtifacts(userId, { force });
+        await pushPendingImpressions(userId, { force });
+        console.log('[sync] followup pushes done');
       }
     }
 
@@ -82,9 +132,32 @@ export async function runManualSync(
 ): Promise<RunSyncOutcome | null> {
   if (!userId) return null;
   console.log('[sync] manual sync requested');
+  if (currentRun) {
+    console.log('[sync] manual sync waiting briefly for active run', {
+      activeForMs: Date.now() - currentStartedAt,
+    });
+    const settled = await waitForActiveRunToSettle();
+    if (!settled) {
+      console.warn('[sync] manual sync skipped: active run still in progress');
+      invalidateSyncRelated();
+      return null;
+    }
+  }
   await resetFailedRetries(userId);
+  await resetFailedArtifactRetries(userId);
+  await resetFailedImpressionRetries(userId);
   invalidateSyncRelated();
-  return runSync(userId, { pull: true });
+  return runSync(userId, { pull: true, force: true });
+}
+
+async function waitForActiveRunToSettle(): Promise<boolean> {
+  if (!currentRun) return true;
+  return Promise.race([
+    currentRun.then(() => true),
+    new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(false), ACTIVE_SYNC_WAIT_MS);
+    }),
+  ]);
 }
 
 export function startSyncEngine(userId: string): () => void {
@@ -98,10 +171,17 @@ export function startSyncEngine(userId: string): () => void {
 
   fire('initial');
 
+  // Only treat as reconnect on offline → online transition.
+  // Optimistic default avoids a duplicate trigger right after `fire('initial')`,
+  // since addEventListener immediately delivers the current state.
+  let prevOnline = true;
   const netUnsub = NetInfo.addEventListener((state) => {
-    if (state.isConnected && state.isInternetReachable !== false) {
+    const online =
+      state.isConnected === true && state.isInternetReachable !== false;
+    if (!prevOnline && online) {
       fire('network-reconnect');
     }
+    prevOnline = online;
   });
 
   const appStateSub = AppState.addEventListener('change', (next: AppStateStatus) => {
