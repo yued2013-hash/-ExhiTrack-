@@ -1,0 +1,4 @@
+allowBuilds:
+  unrs-resolver: true
+patchedDependencies:
+  '@react-native-ml-kit/text-recognition@2.0.0': pnpm-patches/@react-native-ml-kit__text-recognition@2.0.0.patch

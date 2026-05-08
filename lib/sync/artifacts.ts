@@ -21,7 +21,7 @@ const MAX_RETRIES = 3;
 const BACKOFF_MS = [0, 5_000, 30_000];
 const PHOTOS_BUCKET = 'photos';
 const ARTIFACT_COLUMNS =
-  'id, user_id, exhibition_id, photo_url, thumbnail_url, photo_taken_at, latitude, longitude, imported_from, group_id, created_at, updated_at';
+  'id, user_id, exhibition_id, photo_url, thumbnail_url, photo_taken_at, latitude, longitude, imported_from, group_id, name, dynasty, category, origin, era, label_description, raw_ocr_text, extraction_status, extraction_error, extraction_updated_at, created_at, updated_at';
 const LEGACY_ARTIFACT_COLUMNS =
   'id, user_id, exhibition_id, photo_url, thumbnail_url, photo_taken_at, group_id, created_at, updated_at';
 
@@ -68,6 +68,31 @@ function isMissingImportMetadataColumn(e: unknown): boolean {
       (msg.includes('latitude') ||
         msg.includes('longitude') ||
         msg.includes('imported_from')))
+  );
+}
+
+function isMissingArtifactInfoColumn(e: unknown): boolean {
+  const err = toError(e);
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes('column artifacts.name does not exist') ||
+    msg.includes('column artifacts.dynasty does not exist') ||
+    msg.includes('column artifacts.category does not exist') ||
+    msg.includes('column artifacts.origin does not exist') ||
+    msg.includes('column artifacts.era does not exist') ||
+    msg.includes('column artifacts.label_description does not exist') ||
+    msg.includes('column artifacts.raw_ocr_text does not exist') ||
+    msg.includes('column artifacts.extraction_status does not exist') ||
+    msg.includes("column 'name'") ||
+    msg.includes("column 'dynasty'") ||
+    msg.includes("column 'category'") ||
+    msg.includes("column 'label_description'") ||
+    (msg.includes('schema cache') &&
+      (msg.includes('label_description') ||
+        msg.includes('raw_ocr_text') ||
+        msg.includes('extraction_status') ||
+        msg.includes('dynasty') ||
+        msg.includes('category')))
   );
 }
 
@@ -197,16 +222,44 @@ async function pushOne(row: ArtifactRow): Promise<void> {
     longitude: row.longitude,
     imported_from: row.imported_from,
     group_id: row.group_id,
+    name: row.name,
+    dynasty: row.dynasty,
+    category: row.category,
+    origin: row.origin,
+    era: row.era,
+    label_description: row.label_description,
+    raw_ocr_text: row.raw_ocr_text,
+    extraction_status: row.extraction_status,
+    extraction_error: row.extraction_error,
+    extraction_updated_at: row.extraction_updated_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
   const { error } = await supabase.from('artifacts').upsert(payload);
-  if (error && isMissingImportMetadataColumn(error)) {
-    const { latitude: _latitude, longitude: _longitude, imported_from: _importedFrom, ...legacyPayload } = payload;
+  if (
+    error &&
+    (isMissingImportMetadataColumn(error) || isMissingArtifactInfoColumn(error))
+  ) {
+    const {
+      latitude: _latitude,
+      longitude: _longitude,
+      imported_from: _importedFrom,
+      name: _name,
+      dynasty: _dynasty,
+      category: _category,
+      origin: _origin,
+      era: _era,
+      label_description: _labelDescription,
+      raw_ocr_text: _rawOcrText,
+      extraction_status: _extractionStatus,
+      extraction_error: _extractionError,
+      extraction_updated_at: _extractionUpdatedAt,
+      ...legacyPayload
+    } = payload;
     const retry = await supabase.from('artifacts').upsert(legacyPayload);
     if (retry.error) throw toError(retry.error);
     console.warn(
-      '[sync.artifacts] Supabase artifacts import metadata columns missing; pushed legacy payload. Run migration 0004_artifact_import_metadata.sql.',
+      '[sync.artifacts] Supabase artifacts metadata columns missing; pushed legacy payload. Run migrations 0004 and 0005.',
     );
     return;
   }
@@ -270,7 +323,10 @@ export async function pullArtifacts(
     .select(ARTIFACT_COLUMNS)
     .eq('user_id', userId);
   let cloudRows: CloudArtifact[];
-  if (error && isMissingImportMetadataColumn(error)) {
+  if (
+    error &&
+    (isMissingImportMetadataColumn(error) || isMissingArtifactInfoColumn(error))
+  ) {
     const legacy = await supabase
       .from('artifacts')
       .select(LEGACY_ARTIFACT_COLUMNS)
@@ -281,9 +337,19 @@ export async function pullArtifacts(
       latitude: null,
       longitude: null,
       imported_from: null,
+      name: null,
+      dynasty: null,
+      category: null,
+      origin: null,
+      era: null,
+      label_description: null,
+      raw_ocr_text: null,
+      extraction_status: 'idle' as const,
+      extraction_error: null,
+      extraction_updated_at: null,
     }));
     console.warn(
-      '[sync.artifacts] Supabase artifacts import metadata columns missing; pulled legacy columns. Run migration 0004_artifact_import_metadata.sql.',
+      '[sync.artifacts] Supabase artifacts metadata columns missing; pulled legacy columns. Run migrations 0004 and 0005.',
     );
   } else {
     if (error) throw toError(error);

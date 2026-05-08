@@ -8,6 +8,10 @@ import {
   type ArtifactSyncProblem,
 } from '@/lib/db/artifacts';
 import {
+  countPendingArtifactPhotos,
+  type ArtifactPhotoSyncCounts,
+} from '@/lib/db/artifactPhotos';
+import {
   countPendingSync,
   createExhibition,
   getExhibition,
@@ -78,6 +82,7 @@ export function useExhibition(id: string | undefined) {
 export type AggregateSyncCounts = {
   exhibitions: SyncCounts;
   artifacts: ArtifactSyncCounts;
+  artifactPhotos: ArtifactPhotoSyncCounts;
   impressions: ImpressionSyncCounts;
   artifactProblems: ArtifactSyncProblem[];
   impressionProblems: ImpressionSyncProblem[];
@@ -95,6 +100,7 @@ export function useSyncStatusCounts() {
         return {
           exhibitions: empty,
           artifacts: empty,
+          artifactPhotos: empty,
           impressions: empty,
           artifactProblems: [],
           impressionProblems: [],
@@ -105,12 +111,14 @@ export function useSyncStatusCounts() {
       const [
         exhibitions,
         artifacts,
+        artifactPhotos,
         impressions,
         artifactProblems,
         impressionProblems,
       ] = await Promise.all([
         countPendingSync(userId),
         countPendingArtifacts(userId),
+        countPendingArtifactPhotos(userId),
         countPendingImpressions(userId),
         listArtifactSyncProblems(userId),
         listImpressionSyncProblems(userId),
@@ -118,13 +126,20 @@ export function useSyncStatusCounts() {
       return {
         exhibitions,
         artifacts,
+        artifactPhotos,
         impressions,
         artifactProblems,
         impressionProblems,
         totalPending:
-          exhibitions.pending + artifacts.pending + impressions.pending,
+          exhibitions.pending +
+          artifacts.pending +
+          artifactPhotos.pending +
+          impressions.pending,
         totalFailed:
-          exhibitions.failed + artifacts.failed + impressions.failed,
+          exhibitions.failed +
+          artifacts.failed +
+          artifactPhotos.failed +
+          impressions.failed,
       };
     },
     enabled: !!userId,

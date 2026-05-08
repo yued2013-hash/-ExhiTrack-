@@ -2,6 +2,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { resetFailedArtifactRetries } from '@/lib/db/artifacts';
+import { resetFailedArtifactPhotoRetries } from '@/lib/db/artifactPhotos';
 import { resetFailedRetries } from '@/lib/db/exhibitions';
 import { resetFailedImpressionRetries } from '@/lib/db/impressions';
 import { queryClient } from '@/lib/queryClient';
@@ -10,6 +11,10 @@ import {
   pullArtifacts,
   pushPendingArtifacts,
 } from './artifacts';
+import {
+  pullArtifactPhotos,
+  pushPendingArtifactPhotos,
+} from './artifactPhotos';
 import {
   pullExhibitions,
   pushPendingExhibitions,
@@ -37,6 +42,7 @@ export type RunSyncOutcome = {
 function invalidateSyncRelated() {
   queryClient.invalidateQueries({ queryKey: ['exhibitions'] });
   queryClient.invalidateQueries({ queryKey: ['artifacts'] });
+  queryClient.invalidateQueries({ queryKey: ['artifact-photos'] });
   queryClient.invalidateQueries({ queryKey: ['impressions'] });
   queryClient.invalidateQueries({ queryKey: ['sync-status'] });
 }
@@ -86,12 +92,14 @@ async function runSyncInternal(
       return null;
     }
 
-    // Push order: exhibitions → artifacts → impressions
-    // (artifact rows reference exhibition_id; impression rows reference both)
+    // Push order: exhibitions -> artifacts -> artifact photos/links -> impressions.
+    // Photo links reference both artifacts and formal photo rows.
     const pushResult = await pushPendingExhibitions(userId, { force });
     console.log('[sync] push exhibitions', pushResult);
     const artifactsPush = await pushPendingArtifacts(userId, { force });
     console.log('[sync] push artifacts', artifactsPush);
+    const artifactPhotosPush = await pushPendingArtifactPhotos(userId, { force });
+    console.log('[sync] push artifact photos', artifactPhotosPush);
     const impressionsPush = await pushPendingImpressions(userId, { force });
     console.log('[sync] push impressions', impressionsPush);
 
@@ -101,6 +109,8 @@ async function runSyncInternal(
       console.log('[sync] pull exhibitions', pullResult);
       const artifactsPull = await pullArtifacts(userId);
       console.log('[sync] pull artifacts', artifactsPull);
+      const artifactPhotosPull = await pullArtifactPhotos(userId);
+      console.log('[sync] pull artifact photos', artifactPhotosPull);
       const impressionsPull = await pullImpressions(userId);
       console.log('[sync] pull impressions', impressionsPull);
 
@@ -108,10 +118,12 @@ async function runSyncInternal(
       const needsFollowup =
         pullResult.resyncedDelete > 0 ||
         artifactsPull.resyncedDelete > 0 ||
+        artifactPhotosPull.resyncedDelete > 0 ||
         impressionsPull.resyncedDelete > 0;
       if (needsFollowup) {
         await pushPendingExhibitions(userId, { force });
         await pushPendingArtifacts(userId, { force });
+        await pushPendingArtifactPhotos(userId, { force });
         await pushPendingImpressions(userId, { force });
         console.log('[sync] followup pushes done');
       }
@@ -145,6 +157,7 @@ export async function runManualSync(
   }
   await resetFailedRetries(userId);
   await resetFailedArtifactRetries(userId);
+  await resetFailedArtifactPhotoRetries(userId);
   await resetFailedImpressionRetries(userId);
   invalidateSyncRelated();
   return runSync(userId, { pull: true, force: true });
