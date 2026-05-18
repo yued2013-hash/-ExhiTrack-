@@ -8,6 +8,7 @@ ExhiTrack is an Expo React Native app for documenting museum visits. It captures
 - Local OCR is available through `@react-native-ml-kit/text-recognition`; this does not require paid cloud OCR.
 - Supabase stores exhibitions, artifacts, impressions, artifact photos, and artifact-photo links.
 - Zhipu AI GLM-4-Flash is the default cloud model for structuring OCR text in the Supabase Edge Function.
+- Cloud OCR fallback is disabled by default, so the paid cloud path is only text structuring after local ML Kit OCR.
 
 ## Recent Updates
 
@@ -75,10 +76,15 @@ For cloud AI extraction, configure Supabase Edge Function secrets:
 
 - `AI_PROVIDER=zhipu`
 - `ZHIPU_API_KEY`
-- `ZHIPU_TEXT_MODEL=glm-4-flash`
-- optional Aliyun OCR credentials if using Aliyun OCR separately
+- `ZHIPU_TEXT_MODEL=glm-4-flash-250414`
 
 DashScope/Bailian is still available as a fallback by setting `AI_PROVIDER=dashscope` and `DASHSCOPE_API_KEY`.
+
+Aliyun OCR fallback is intentionally off by default. Enable it only when you accept possible OCR billing:
+
+- `ENABLE_CLOUD_OCR_FALLBACK=true`
+- `ALIYUN_OCR_ENDPOINT`
+- `ALIYUN_OCR_APPCODE` or `ALIYUN_OCR_API_KEY`
 
 Do not commit real API keys. Rotate any key that has been pasted into chat or logs.
 
@@ -88,5 +94,5 @@ Do not commit real API keys. Rotate any key that has been pasted into chat or lo
 2. Add a clearer artifact/photo grouping workflow for cases where a label photo and several artifact photos need to be associated after capture.
 3. Add cloud pull verification on a second device or fresh install to confirm formal photo links restore correctly.
 4. Add migration/backfill diagnostics in-app so old local databases can report whether v9 has run successfully.
-5. Improve AI extraction fallback: local OCR first, then optional Zhipu GLM structuring when the user enables a cloud API key.
+5. Improve AI extraction fallback: local OCR first, then optional Zhipu GLM structuring when the user enables a cloud API key; keep cloud OCR behind an explicit billing opt-in.
 6. Add focused tests around artifact-photo link creation, derived-entry creation, and sync payload generation.

@@ -81,7 +81,7 @@ Deno.serve(async (req) => {
         .eq('id', row.artifact_id);
 
       try {
-        const rawOcrText = row.raw_ocr_text?.trim() || (await extractOcrText(row.photo_url));
+        const rawOcrText = await resolveOcrText(row);
         const info = await extractInfoWithLlm(rawOcrText);
         const { error } = await supabase
           .from('artifacts')
@@ -169,6 +169,25 @@ async function extractOcrText(photoUrl: string): Promise<string> {
   return text;
 }
 
+async function resolveOcrText(row: {
+  artifact_id: string;
+  photo_url: string;
+  raw_ocr_text?: string;
+}): Promise<string> {
+  const localText = row.raw_ocr_text?.trim();
+  if (localText) return localText;
+
+  if (Deno.env.get('ENABLE_CLOUD_OCR_FALLBACK') !== 'true') {
+    throw new Error(
+      'Missing raw_ocr_text. Cloud OCR fallback is disabled; run local OCR first or set ENABLE_CLOUD_OCR_FALLBACK=true.',
+    );
+  }
+  if (!row.photo_url) {
+    throw new Error('Missing photo_url for cloud OCR fallback.');
+  }
+  return extractOcrText(row.photo_url);
+}
+
 function readOcrText(data: unknown): string {
   if (!data || typeof data !== 'object') return '';
   const record = data as Record<string, unknown>;
@@ -196,7 +215,7 @@ async function extractInfoWithLlm(rawOcrText: string): Promise<ArtifactInfo> {
 
 async function extractInfoWithZhipu(rawOcrText: string): Promise<ArtifactInfo> {
   const apiKey = requiredEnv('ZHIPU_API_KEY');
-  const model = Deno.env.get('ZHIPU_TEXT_MODEL') ?? 'glm-4-flash';
+  const model = Deno.env.get('ZHIPU_TEXT_MODEL') ?? 'glm-4-flash-250414';
   const response = await fetch(
     'https://open.bigmodel.cn/api/paas/v4/chat/completions',
     {
