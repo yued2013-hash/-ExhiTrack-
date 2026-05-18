@@ -2,6 +2,7 @@
 
 # dependencies
 node_modules/
+.pnpm-store/
 
 # Expo
 .expo/
@@ -44,3 +45,9 @@ app-example
 # generated native folders
 /ios
 /android
+
+# local Android tooling
+.android/
+
+# Supabase CLI local state
+supabase/.temp/

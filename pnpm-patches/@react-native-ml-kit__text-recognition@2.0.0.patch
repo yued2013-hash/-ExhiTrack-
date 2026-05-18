@@ -1,0 +1,12 @@
+diff --git a/android/build.gradle b/android/build.gradle
+index 6a2e36f..d8f71cf 100644
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -30,6 +30,7 @@ buildscript {
+ }
+ 
+ android {
++    namespace "com.rnmlkit.textrecognition"
+     compileSdkVersion safeExtGet('compileSdkVersion', DEFAULT_COMPILE_SDK_VERSION)
+     buildToolsVersion safeExtGet('buildToolsVersion', DEFAULT_BUILD_TOOLS_VERSION)
+     defaultConfig {

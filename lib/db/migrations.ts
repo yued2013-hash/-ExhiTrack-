@@ -114,6 +114,114 @@ export const MIGRATIONS: Array<(db: SQLiteDatabase) => Promise<void>> = [
       CREATE INDEX IF NOT EXISTS idx_artifacts_photo_taken_at ON artifacts(photo_taken_at);
     `);
   },
+
+  // v7 → v8: structured artifact information extracted from exhibit labels.
+  async (db) => {
+    await db.execAsync(`
+      ALTER TABLE artifacts ADD COLUMN name TEXT;
+      ALTER TABLE artifacts ADD COLUMN dynasty TEXT;
+      ALTER TABLE artifacts ADD COLUMN category TEXT;
+      ALTER TABLE artifacts ADD COLUMN origin TEXT;
+      ALTER TABLE artifacts ADD COLUMN era TEXT;
+      ALTER TABLE artifacts ADD COLUMN label_description TEXT;
+      ALTER TABLE artifacts ADD COLUMN raw_ocr_text TEXT;
+      ALTER TABLE artifacts ADD COLUMN extraction_status TEXT NOT NULL DEFAULT 'idle';
+      ALTER TABLE artifacts ADD COLUMN extraction_error TEXT;
+      ALTER TABLE artifacts ADD COLUMN extraction_updated_at TEXT;
+      CREATE INDEX IF NOT EXISTS idx_artifacts_extraction_status ON artifacts(extraction_status);
+    `);
+  },
+
+  // v8 -> v9: formal photo/material model for many-to-many artifact photos.
+  async (db) => {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS artifact_photos (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        exhibition_id TEXT NOT NULL,
+        photo_local_path TEXT NOT NULL,
+        thumbnail_local_path TEXT,
+        photo_cloud_url TEXT,
+        thumbnail_cloud_url TEXT,
+        photo_taken_at TEXT NOT NULL,
+        latitude REAL,
+        longitude REAL,
+        imported_from TEXT,
+        raw_ocr_text TEXT,
+        ocr_status TEXT NOT NULL DEFAULT 'idle',
+        ocr_error TEXT,
+        ocr_updated_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        sync_status TEXT NOT NULL DEFAULT 'pending',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        last_attempt_at TEXT,
+        FOREIGN KEY (exhibition_id) REFERENCES exhibitions(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_artifact_photos_user_id ON artifact_photos(user_id);
+      CREATE INDEX IF NOT EXISTS idx_artifact_photos_exhibition_id ON artifact_photos(exhibition_id);
+      CREATE INDEX IF NOT EXISTS idx_artifact_photos_sync_status ON artifact_photos(sync_status);
+      CREATE INDEX IF NOT EXISTS idx_artifact_photos_deleted_at ON artifact_photos(deleted_at);
+
+      CREATE TABLE IF NOT EXISTS artifact_photo_links (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        exhibition_id TEXT NOT NULL,
+        artifact_id TEXT NOT NULL,
+        photo_id TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'primary',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        sync_status TEXT NOT NULL DEFAULT 'pending',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        last_attempt_at TEXT,
+        FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE,
+        FOREIGN KEY (photo_id) REFERENCES artifact_photos(id) ON DELETE CASCADE,
+        FOREIGN KEY (exhibition_id) REFERENCES exhibitions(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_artifact_photo_links_user_id ON artifact_photo_links(user_id);
+      CREATE INDEX IF NOT EXISTS idx_artifact_photo_links_artifact_id ON artifact_photo_links(artifact_id);
+      CREATE INDEX IF NOT EXISTS idx_artifact_photo_links_photo_id ON artifact_photo_links(photo_id);
+      CREATE INDEX IF NOT EXISTS idx_artifact_photo_links_exhibition_id ON artifact_photo_links(exhibition_id);
+      CREATE INDEX IF NOT EXISTS idx_artifact_photo_links_sync_status ON artifact_photo_links(sync_status);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_photo_links_unique_active
+        ON artifact_photo_links(artifact_id, photo_id, role)
+        WHERE deleted_at IS NULL;
+
+      INSERT OR IGNORE INTO artifact_photos (
+        id, user_id, exhibition_id, photo_local_path, thumbnail_local_path,
+        photo_cloud_url, thumbnail_cloud_url,
+        photo_taken_at, latitude, longitude, imported_from,
+        raw_ocr_text, ocr_status, ocr_error, ocr_updated_at,
+        created_at, updated_at, deleted_at, sync_status, retry_count,
+        last_error, last_attempt_at
+      )
+      SELECT
+        id, user_id, exhibition_id, photo_local_path, thumbnail_local_path,
+        photo_cloud_url, thumbnail_cloud_url,
+        photo_taken_at, latitude, longitude, imported_from,
+        raw_ocr_text, extraction_status, extraction_error, extraction_updated_at,
+        created_at, updated_at, deleted_at, sync_status, retry_count,
+        last_error, last_attempt_at
+      FROM artifacts;
+
+      INSERT OR IGNORE INTO artifact_photo_links (
+        id, user_id, exhibition_id, artifact_id, photo_id, role, sort_order,
+        created_at, updated_at, deleted_at, sync_status, retry_count,
+        last_error, last_attempt_at
+      )
+      SELECT
+        id || ':primary', user_id, exhibition_id, id, id, 'primary', 0,
+        created_at, updated_at, deleted_at, sync_status, retry_count,
+        last_error, last_attempt_at
+      FROM artifacts;
+    `);
+  },
 ];
 
 export async function runMigrations(db: SQLiteDatabase): Promise<void> {

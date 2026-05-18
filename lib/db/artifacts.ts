@@ -26,6 +26,31 @@ export type ArtifactRow = {
   group_id: string | null;
   photo_cloud_url: string | null;
   thumbnail_cloud_url: string | null;
+  name: string | null;
+  dynasty: string | null;
+  category: string | null;
+  origin: string | null;
+  era: string | null;
+  label_description: string | null;
+  raw_ocr_text: string | null;
+  extraction_status: ExtractionStatus;
+  extraction_error: string | null;
+  extraction_updated_at: string | null;
+};
+
+export type ExtractionStatus = 'idle' | 'queued' | 'processing' | 'done' | 'failed' | 'manual';
+
+export type ArtifactInfoPatch = {
+  name?: string | null;
+  dynasty?: string | null;
+  category?: string | null;
+  origin?: string | null;
+  era?: string | null;
+  label_description?: string | null;
+  raw_ocr_text?: string | null;
+  extraction_status?: ExtractionStatus;
+  extraction_error?: string | null;
+  extraction_updated_at?: string | null;
 };
 
 const PHOTOS_DIR = 'photos';
@@ -144,6 +169,27 @@ async function saveArtifactFromUri(
     now,
     input.group_id,
   );
+  await createPrimaryPhotoRowsForArtifact({
+    id,
+    user_id: input.user_id,
+    exhibition_id: input.exhibition_id,
+    photo_local_path: photoRel,
+    thumbnail_local_path: thumbRel,
+    photo_cloud_url: null,
+    thumbnail_cloud_url: null,
+    photo_taken_at: takenAt,
+    latitude: input.latitude ?? null,
+    longitude: input.longitude ?? null,
+    imported_from: input.imported_from ?? null,
+    raw_ocr_text: null,
+    ocr_status: 'idle',
+    ocr_error: null,
+    ocr_updated_at: null,
+    created_at: now,
+    updated_at: now,
+    deleted_at: null,
+    sync_status: 'pending',
+  });
   const row = await db.getFirstAsync<ArtifactRow>(
     'SELECT * FROM artifacts WHERE id = ?',
     id,
@@ -182,6 +228,184 @@ export async function importArtifacts(
   inputs: ImportArtifactInput[],
 ): Promise<ArtifactRow[]> {
   return mapWithConcurrency(sortImportInputs(inputs), 4, importArtifact);
+}
+
+export async function createArtifactEntryFromSource(
+  sourceId: string,
+  patch: ArtifactInfoPatch = {},
+): Promise<ArtifactRow> {
+  const db = await getDb();
+  const source = await getArtifact(sourceId);
+  if (!source) throw new Error('Source artifact not found.');
+
+  const id = Crypto.randomUUID();
+  const now = new Date().toISOString();
+  await db.runAsync(
+    `INSERT INTO artifacts
+       (id, user_id, exhibition_id, photo_local_path, thumbnail_local_path,
+        photo_cloud_url, thumbnail_cloud_url,
+        photo_taken_at, latitude, longitude, imported_from, group_id,
+        name, dynasty, category, origin, era,
+        label_description, raw_ocr_text,
+        extraction_status, extraction_error, extraction_updated_at,
+        created_at, updated_at, sync_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+    id,
+    source.user_id,
+    source.exhibition_id,
+    source.photo_local_path,
+    source.thumbnail_local_path,
+    source.photo_cloud_url,
+    source.thumbnail_cloud_url,
+    source.photo_taken_at,
+    source.latitude,
+    source.longitude,
+    'derived_entry',
+    source.group_id ?? source.id,
+    patch.name ?? null,
+    patch.dynasty ?? null,
+    patch.category ?? null,
+    patch.origin ?? null,
+    patch.era ?? null,
+    patch.label_description ?? null,
+    patch.raw_ocr_text ?? source.raw_ocr_text ?? null,
+    patch.extraction_status ?? 'manual',
+    patch.extraction_error ?? null,
+    patch.extraction_updated_at ?? now,
+    now,
+    now,
+  );
+
+  await createPhotoRowsFromSourceForDerivedEntry({
+    source,
+    artifactId: id,
+    now,
+  });
+
+  const row = await getArtifact(id);
+  if (!row) throw new Error('Artifact entry was not created.');
+  return row;
+}
+
+type PrimaryPhotoInput = {
+  id: string;
+  user_id: string;
+  exhibition_id: string;
+  photo_local_path: string;
+  thumbnail_local_path: string | null;
+  photo_cloud_url: string | null;
+  thumbnail_cloud_url: string | null;
+  photo_taken_at: string;
+  latitude: number | null;
+  longitude: number | null;
+  imported_from: string | null;
+  raw_ocr_text: string | null;
+  ocr_status: string;
+  ocr_error: string | null;
+  ocr_updated_at: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  sync_status: SyncStatus;
+};
+
+async function createPrimaryPhotoRowsForArtifact(
+  input: PrimaryPhotoInput,
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT OR IGNORE INTO artifact_photos (
+       id, user_id, exhibition_id, photo_local_path, thumbnail_local_path,
+       photo_cloud_url, thumbnail_cloud_url,
+       photo_taken_at, latitude, longitude, imported_from,
+       raw_ocr_text, ocr_status, ocr_error, ocr_updated_at,
+       created_at, updated_at, deleted_at, sync_status, retry_count,
+       last_error, last_attempt_at
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL)`,
+    input.id,
+    input.user_id,
+    input.exhibition_id,
+    input.photo_local_path,
+    input.thumbnail_local_path,
+    input.photo_cloud_url,
+    input.thumbnail_cloud_url,
+    input.photo_taken_at,
+    input.latitude,
+    input.longitude,
+    input.imported_from,
+    input.raw_ocr_text,
+    input.ocr_status,
+    input.ocr_error,
+    input.ocr_updated_at,
+    input.created_at,
+    input.updated_at,
+    input.deleted_at,
+    input.sync_status,
+  );
+  await db.runAsync(
+    `INSERT OR IGNORE INTO artifact_photo_links (
+       id, user_id, exhibition_id, artifact_id, photo_id, role, sort_order,
+       created_at, updated_at, deleted_at, sync_status, retry_count,
+       last_error, last_attempt_at
+     )
+     VALUES (?, ?, ?, ?, ?, 'primary', 0, ?, ?, ?, ?, 0, NULL, NULL)`,
+    `${input.id}:primary`,
+    input.user_id,
+    input.exhibition_id,
+    input.id,
+    input.id,
+    input.created_at,
+    input.updated_at,
+    input.deleted_at,
+    input.sync_status,
+  );
+}
+
+async function createPhotoRowsFromSourceForDerivedEntry(input: {
+  source: ArtifactRow;
+  artifactId: string;
+  now: string;
+}): Promise<void> {
+  const { source, artifactId, now } = input;
+  await createPrimaryPhotoRowsForArtifact({
+    id: source.id,
+    user_id: source.user_id,
+    exhibition_id: source.exhibition_id,
+    photo_local_path: source.photo_local_path,
+    thumbnail_local_path: source.thumbnail_local_path,
+    photo_cloud_url: source.photo_cloud_url,
+    thumbnail_cloud_url: source.thumbnail_cloud_url,
+    photo_taken_at: source.photo_taken_at,
+    latitude: source.latitude,
+    longitude: source.longitude,
+    imported_from: source.imported_from,
+    raw_ocr_text: source.raw_ocr_text,
+    ocr_status: source.extraction_status ?? 'idle',
+    ocr_error: source.extraction_error,
+    ocr_updated_at: source.extraction_updated_at,
+    created_at: source.created_at,
+    updated_at: source.updated_at,
+    deleted_at: source.deleted_at,
+    sync_status: source.sync_status,
+  });
+
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT OR IGNORE INTO artifact_photo_links (
+       id, user_id, exhibition_id, artifact_id, photo_id, role, sort_order,
+       created_at, updated_at, deleted_at, sync_status, retry_count,
+       last_error, last_attempt_at
+     )
+     VALUES (?, ?, ?, ?, ?, 'primary', 0, ?, ?, NULL, 'pending', 0, NULL, NULL)`,
+    `${artifactId}:${source.id}:primary`,
+    source.user_id,
+    source.exhibition_id,
+    artifactId,
+    source.id,
+    now,
+    now,
+  );
 }
 
 async function mapWithConcurrency<T, R>(
@@ -228,6 +452,56 @@ export async function softDeleteArtifact(id: string): Promise<void> {
        SET deleted_at = ?, updated_at = ?, sync_status = 'pending'
      WHERE id = ?`,
     now,
+    now,
+    id,
+  );
+}
+
+export async function updateArtifactInfo(
+  id: string,
+  patch: ArtifactInfoPatch,
+): Promise<void> {
+  const db = await getDb();
+  const now = new Date().toISOString();
+  const existing = await db.getFirstAsync<ArtifactRow>(
+    'SELECT * FROM artifacts WHERE id = ?',
+    id,
+  );
+  await db.runAsync(
+    `UPDATE artifacts
+       SET name = ?,
+           dynasty = ?,
+           category = ?,
+           origin = ?,
+           era = ?,
+           label_description = ?,
+           raw_ocr_text = ?,
+           extraction_status = ?,
+           extraction_error = ?,
+           extraction_updated_at = ?,
+           updated_at = ?,
+           sync_status = 'pending'
+     WHERE id = ?`,
+    patch.name !== undefined ? patch.name : existing?.name ?? null,
+    patch.dynasty !== undefined ? patch.dynasty : existing?.dynasty ?? null,
+    patch.category !== undefined ? patch.category : existing?.category ?? null,
+    patch.origin !== undefined ? patch.origin : existing?.origin ?? null,
+    patch.era !== undefined ? patch.era : existing?.era ?? null,
+    patch.label_description !== undefined
+      ? patch.label_description
+      : existing?.label_description ?? null,
+    patch.raw_ocr_text !== undefined
+      ? patch.raw_ocr_text
+      : existing?.raw_ocr_text ?? null,
+    patch.extraction_status !== undefined
+      ? patch.extraction_status
+      : existing?.extraction_status ?? 'manual',
+    patch.extraction_error !== undefined
+      ? patch.extraction_error
+      : existing?.extraction_error ?? null,
+    patch.extraction_updated_at !== undefined
+      ? patch.extraction_updated_at
+      : existing?.extraction_updated_at ?? now,
     now,
     id,
   );
@@ -376,6 +650,16 @@ export type CloudArtifact = {
   longitude: number | null;
   imported_from: string | null;
   group_id: string | null;
+  name: string | null;
+  dynasty: string | null;
+  category: string | null;
+  origin: string | null;
+  era: string | null;
+  label_description: string | null;
+  raw_ocr_text: string | null;
+  extraction_status: ExtractionStatus;
+  extraction_error: string | null;
+  extraction_updated_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -397,6 +681,9 @@ export async function upsertArtifactFromCloud(
        photo_cloud_url = ?, thumbnail_cloud_url = ?,
          photo_taken_at = ?, latitude = ?, longitude = ?, imported_from = ?,
          group_id = ?,
+         name = ?, dynasty = ?, category = ?, origin = ?, era = ?,
+         label_description = ?, raw_ocr_text = ?,
+         extraction_status = ?, extraction_error = ?, extraction_updated_at = ?,
          created_at = ?, updated_at = ?,
          deleted_at = NULL,
          sync_status = 'synced', retry_count = 0,
@@ -411,6 +698,16 @@ export async function upsertArtifactFromCloud(
       cloud.longitude,
       cloud.imported_from,
       cloud.group_id,
+      cloud.name,
+      cloud.dynasty,
+      cloud.category,
+      cloud.origin,
+      cloud.era,
+      cloud.label_description,
+      cloud.raw_ocr_text,
+      cloud.extraction_status ?? 'idle',
+      cloud.extraction_error,
+      cloud.extraction_updated_at,
       cloud.created_at,
       cloud.updated_at,
       cloud.id,
@@ -422,8 +719,11 @@ export async function upsertArtifactFromCloud(
          (id, user_id, exhibition_id, photo_local_path, thumbnail_local_path,
           photo_cloud_url, thumbnail_cloud_url,
           photo_taken_at, latitude, longitude, imported_from, group_id,
+          name, dynasty, category, origin, era,
+          label_description, raw_ocr_text,
+          extraction_status, extraction_error, extraction_updated_at,
           created_at, updated_at, deleted_at, sync_status, retry_count)
-       VALUES (?, ?, ?, '', NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'synced', 0)`,
+       VALUES (?, ?, ?, '', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'synced', 0)`,
       cloud.id,
       cloud.user_id,
       cloud.exhibition_id,
@@ -434,6 +734,16 @@ export async function upsertArtifactFromCloud(
       cloud.longitude,
       cloud.imported_from,
       cloud.group_id,
+      cloud.name,
+      cloud.dynasty,
+      cloud.category,
+      cloud.origin,
+      cloud.era,
+      cloud.label_description,
+      cloud.raw_ocr_text,
+      cloud.extraction_status ?? 'idle',
+      cloud.extraction_error,
+      cloud.extraction_updated_at,
       cloud.created_at,
       cloud.updated_at,
     );
