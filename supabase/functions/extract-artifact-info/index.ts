@@ -19,6 +19,12 @@ type ArtifactInfo = {
   description: string | null;
 };
 
+type TextCorrection = {
+  from: string;
+  to: string;
+  reason: string;
+};
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -104,7 +110,8 @@ Deno.serve(async (req) => {
 
       try {
         const rawOcrText = await resolveOcrText(row);
-        const info = await extractInfoWithLlm(rawOcrText);
+        const normalizedOcr = normalizeMuseumText(rawOcrText);
+        const info = await extractInfoWithLlm(normalizedOcr.text ?? rawOcrText);
         const { error } = await supabase
           .from('artifacts')
           .update({
@@ -121,7 +128,11 @@ Deno.serve(async (req) => {
           })
           .eq('id', row.artifact_id);
         if (error) throw error;
-        results.push({ artifact_id: row.artifact_id, ok: true });
+        results.push({
+          artifact_id: row.artifact_id,
+          ok: true,
+          corrections: normalizedOcr.corrections,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await supabase
@@ -310,12 +321,12 @@ function parseJsonObject(content: string): unknown {
 function normalizeInfo(value: unknown): ArtifactInfo {
   const row = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   return {
-    name: normalizeMuseumText(readString(row.name)),
-    dynasty: normalizeMuseumText(readString(row.dynasty)),
-    category: normalizeMuseumText(readString(row.category)),
-    origin: normalizeMuseumText(readString(row.origin)),
-    era: normalizeMuseumText(readString(row.era)),
-    description: normalizeMuseumText(readString(row.description)),
+    name: normalizeMuseumText(readString(row.name)).text,
+    dynasty: normalizeMuseumText(readString(row.dynasty)).text,
+    category: normalizeMuseumText(readString(row.category)).text,
+    origin: normalizeMuseumText(readString(row.origin)).text,
+    era: normalizeMuseumText(readString(row.era)).text,
+    description: normalizeMuseumText(readString(row.description)).text,
   };
 }
 
@@ -323,15 +334,55 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-function normalizeMuseumText(value: string | null): string | null {
-  if (!value) return null;
-  const normalized = value
-    .replace(/銅/g, '铜')
-    .replace(/單/g, '单')
-    .replace(/單枉铜爵/g, '单柱铜爵')
-    .replace(/单枉铜爵/g, '单柱铜爵');
-  return normalized.trim() || null;
+function normalizeMuseumText(value: string | null): {
+  text: string | null;
+  corrections: TextCorrection[];
+} {
+  if (!value) return { text: null, corrections: [] };
+
+  let text = value;
+  const corrections: TextCorrection[] = [];
+  for (const rule of MUSEUM_TEXT_CORRECTION_RULES) {
+    const before = text;
+    text = text.replace(rule.pattern, rule.replacement);
+    if (text !== before) {
+      corrections.push({
+        from: before,
+        to: text,
+        reason: rule.reason,
+      });
+    }
+  }
+
+  return { text: text.trim() || null, corrections };
 }
+
+const MUSEUM_TEXT_CORRECTION_RULES: Array<{
+  pattern: RegExp;
+  replacement: string;
+  reason: string;
+}> = [
+  {
+    pattern: /[\u55ae\u5355]\u6789[\u9285\u94dc]\u7235/g,
+    replacement: '\u5355\u67f1\u94dc\u7235',
+    reason: 'bronze vessel term: single-post bronze jue',
+  },
+  {
+    pattern: /\u9285/g,
+    replacement: '\u94dc',
+    reason: 'traditional-to-simplified bronze character',
+  },
+  {
+    pattern: /\u55ae/g,
+    replacement: '\u5355',
+    reason: 'traditional-to-simplified single character',
+  },
+  {
+    pattern: /\u9751[\u9285\u94dc]/g,
+    replacement: '\u9752\u94dc',
+    reason: 'common bronze term normalization',
+  },
+];
 
 function requiredEnv(name: string): string {
   const value = Deno.env.get(name);
