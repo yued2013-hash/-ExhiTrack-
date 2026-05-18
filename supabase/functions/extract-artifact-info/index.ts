@@ -52,6 +52,11 @@ Validation rules:
 - Cross-check consistency: the dynasty, era, category, and description should not
   contradict each other. If they conflict, keep the better-supported value or use
   null.
+- Prefer Chinese for every output field. If the OCR text contains both Chinese
+  and English for the same label content, use the Chinese wording and ignore the
+  English translation.
+- Use English only as a fallback when no Chinese evidence is available for that
+  field.
 - Do not infer a famous artifact name, dynasty, or excavation source unless the
   OCR text directly supports it.
 - If multiple artifacts appear in the OCR text and there is no clear single
