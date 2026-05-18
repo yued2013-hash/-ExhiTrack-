@@ -57,6 +57,10 @@ Validation rules:
   English translation.
 - Use English only as a fallback when no Chinese evidence is available for that
   field.
+- Normalize Chinese output to Simplified Chinese.
+- Pay special attention to common bronze vessel OCR confusions. For example,
+  when a name looks like "单枉銅爵" or "单枉铜爵", validate it as the museum term
+  "单柱铜爵" if the surrounding context indicates a bronze jue vessel.
 - Do not infer a famous artifact name, dynasty, or excavation source unless the
   OCR text directly supports it.
 - If multiple artifacts appear in the OCR text and there is no clear single
@@ -306,17 +310,27 @@ function parseJsonObject(content: string): unknown {
 function normalizeInfo(value: unknown): ArtifactInfo {
   const row = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   return {
-    name: readString(row.name),
-    dynasty: readString(row.dynasty),
-    category: readString(row.category),
-    origin: readString(row.origin),
-    era: readString(row.era),
-    description: readString(row.description),
+    name: normalizeMuseumText(readString(row.name)),
+    dynasty: normalizeMuseumText(readString(row.dynasty)),
+    category: normalizeMuseumText(readString(row.category)),
+    origin: normalizeMuseumText(readString(row.origin)),
+    era: normalizeMuseumText(readString(row.era)),
+    description: normalizeMuseumText(readString(row.description)),
   };
 }
 
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function normalizeMuseumText(value: string | null): string | null {
+  if (!value) return null;
+  const normalized = value
+    .replace(/銅/g, '铜')
+    .replace(/單/g, '单')
+    .replace(/單枉铜爵/g, '单柱铜爵')
+    .replace(/单枉铜爵/g, '单柱铜爵');
+  return normalized.trim() || null;
 }
 
 function requiredEnv(name: string): string {
