@@ -5,9 +5,9 @@ ExhiTrack is an Expo React Native app for documenting museum visits. It captures
 ## Current Status
 
 - Expo development build for Android is required because native ML Kit text recognition is used.
-- Local OCR is available through `@react-native-ml-kit/text-recognition`; this does not require DashScope billing.
+- Local OCR is available through `@react-native-ml-kit/text-recognition`; this does not require paid cloud OCR.
 - Supabase stores exhibitions, artifacts, impressions, artifact photos, and artifact-photo links.
-- DashScope/Bailian extraction is scaffolded as a Supabase Edge Function, but `DASHSCOPE_API_KEY` must be configured before cloud AI extraction can run.
+- Zhipu AI GLM-4-Flash is the default cloud model for structuring OCR text in the Supabase Edge Function.
 
 ## Recent Updates
 
@@ -73,8 +73,12 @@ Create `.env.local` from `.env.example` and configure:
 
 For cloud AI extraction, configure Supabase Edge Function secrets:
 
-- `DASHSCOPE_API_KEY`
+- `AI_PROVIDER=zhipu`
+- `ZHIPU_API_KEY`
+- `ZHIPU_TEXT_MODEL=glm-4-flash`
 - optional Aliyun OCR credentials if using Aliyun OCR separately
+
+DashScope/Bailian is still available as a fallback by setting `AI_PROVIDER=dashscope` and `DASHSCOPE_API_KEY`.
 
 Do not commit real API keys. Rotate any key that has been pasted into chat or logs.
 
@@ -84,5 +88,5 @@ Do not commit real API keys. Rotate any key that has been pasted into chat or lo
 2. Add a clearer artifact/photo grouping workflow for cases where a label photo and several artifact photos need to be associated after capture.
 3. Add cloud pull verification on a second device or fresh install to confirm formal photo links restore correctly.
 4. Add migration/backfill diagnostics in-app so old local databases can report whether v9 has run successfully.
-5. Improve AI extraction fallback: local OCR first, then optional DashScope/Bailian structuring when the user enables a paid API key.
+5. Improve AI extraction fallback: local OCR first, then optional Zhipu GLM structuring when the user enables a cloud API key.
 6. Add focused tests around artifact-photo link creation, derived-entry creation, and sync payload generation.

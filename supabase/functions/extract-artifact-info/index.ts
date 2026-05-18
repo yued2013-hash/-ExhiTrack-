@@ -25,22 +25,28 @@ const corsHeaders = {
 };
 
 const promptTemplate = (rawOcrText: string) => `
-你是博物馆文物信息抽取专家。下面是一段展签 OCR 文字，请抽取结构化信息：
+You are an expert museum label information extractor.
+Extract structured artifact information from the OCR text below.
 
-OCR 原文：
+OCR text:
 ${rawOcrText}
 
-请输出严格的 JSON 格式，字段如下：
+Return strict JSON only, with this shape:
 {
-  "name": "文物名称",
-  "dynasty": "朝代（如：唐 / 宋 / 战国）",
-  "category": "品类（如：青铜器 / 陶瓷 / 书画 / 玉器）",
-  "origin": "出土地或来源（无则填 null）",
-  "era": "具体年代（如：公元前 5 世纪 / 1368-1644）",
-  "description": "完整展签描述文字"
+  "name": string | null,
+  "dynasty": string | null,
+  "category": string | null,
+  "origin": string | null,
+  "era": string | null,
+  "description": string | null
 }
 
-如果某字段无法判断，填 null。不要编造。只输出 JSON，不要输出任何其他文字。`;
+Rules:
+- Do not invent missing facts.
+- Preserve useful Chinese text from the label.
+- Use null when a field cannot be determined.
+- Return JSON only. No markdown, no commentary.
+`;
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -183,6 +189,46 @@ function readOcrText(data: unknown): string {
 }
 
 async function extractInfoWithLlm(rawOcrText: string): Promise<ArtifactInfo> {
+  const provider = (Deno.env.get('AI_PROVIDER') ?? 'zhipu').toLowerCase();
+  if (provider === 'dashscope') return extractInfoWithDashScope(rawOcrText);
+  return extractInfoWithZhipu(rawOcrText);
+}
+
+async function extractInfoWithZhipu(rawOcrText: string): Promise<ArtifactInfo> {
+  const apiKey = requiredEnv('ZHIPU_API_KEY');
+  const model = Deno.env.get('ZHIPU_TEXT_MODEL') ?? 'glm-4-flash';
+  const response = await fetch(
+    'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        stream: false,
+        messages: [
+          {
+            role: 'system',
+            content: 'You extract museum artifact metadata and return JSON only.',
+          },
+          { role: 'user', content: promptTemplate(rawOcrText) },
+        ],
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Zhipu request failed: ${response.status} ${await response.text()}`);
+  }
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content !== 'string') throw new Error('Zhipu returned empty content');
+  return normalizeInfo(parseJsonObject(content));
+}
+
+async function extractInfoWithDashScope(rawOcrText: string): Promise<ArtifactInfo> {
   const apiKey = requiredEnv('DASHSCOPE_API_KEY');
   const model = Deno.env.get('DASHSCOPE_TEXT_MODEL') ?? 'qwen-plus';
   const response = await fetch(
@@ -207,7 +253,17 @@ async function extractInfoWithLlm(rawOcrText: string): Promise<ArtifactInfo> {
   const data = await response.json();
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== 'string') throw new Error('LLM returned empty content');
-  return normalizeInfo(JSON.parse(content));
+  return normalizeInfo(parseJsonObject(content));
+}
+
+function parseJsonObject(content: string): unknown {
+  try {
+    return JSON.parse(content);
+  } catch {
+    const match = content.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('LLM returned non-JSON content');
+    return JSON.parse(match[0]);
+  }
 }
 
 function normalizeInfo(value: unknown): ArtifactInfo {
