@@ -77,6 +77,10 @@ For cloud AI extraction, configure Supabase Edge Function secrets:
 - `AI_PROVIDER=zhipu`
 - `ZHIPU_API_KEY`
 - `ZHIPU_TEXT_MODEL=glm-4-flash-250414`
+- `AI_VISION_ENABLED=false`
+- `ZHIPU_VISION_MODEL=glm-4.6v-flash`
+
+When `AI_VISION_ENABLED=true`, `extract-artifact-info` sends both the photo URL and local OCR text to GLM-4.6V-Flash so the model can verify corrupted OCR against the original exhibit-label image. Keep it disabled for normal batch extraction if you want the cheapest text-only path.
 
 DashScope/Bailian is still available as a fallback by setting `AI_PROVIDER=dashscope` and `DASHSCOPE_API_KEY`.
 

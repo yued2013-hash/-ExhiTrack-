@@ -111,7 +111,10 @@ Deno.serve(async (req) => {
       try {
         const rawOcrText = await resolveOcrText(row);
         const normalizedOcr = normalizeMuseumText(rawOcrText);
-        const info = await extractInfoWithLlm(normalizedOcr.text ?? rawOcrText);
+        const info = await extractInfoWithLlm(
+          normalizedOcr.text ?? rawOcrText,
+          row.photo_url,
+        );
         const { error } = await supabase
           .from('artifacts')
           .update({
@@ -240,9 +243,15 @@ function readOcrText(data: unknown): string {
   return '';
 }
 
-async function extractInfoWithLlm(rawOcrText: string): Promise<ArtifactInfo> {
+async function extractInfoWithLlm(
+  rawOcrText: string,
+  photoUrl?: string,
+): Promise<ArtifactInfo> {
   const provider = (Deno.env.get('AI_PROVIDER') ?? 'zhipu').toLowerCase();
   if (provider === 'dashscope') return extractInfoWithDashScope(rawOcrText);
+  if (photoUrl && Deno.env.get('AI_VISION_ENABLED') === 'true') {
+    return extractInfoWithZhipuVision(rawOcrText, photoUrl);
+  }
   return extractInfoWithZhipu(rawOcrText);
 }
 
@@ -277,6 +286,59 @@ async function extractInfoWithZhipu(rawOcrText: string): Promise<ArtifactInfo> {
   const data = await response.json();
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== 'string') throw new Error('Zhipu returned empty content');
+  return normalizeInfo(parseJsonObject(content));
+}
+
+async function extractInfoWithZhipuVision(
+  rawOcrText: string,
+  photoUrl: string,
+): Promise<ArtifactInfo> {
+  const apiKey = requiredEnv('ZHIPU_API_KEY');
+  const model = Deno.env.get('ZHIPU_VISION_MODEL') ?? 'glm-4.6v-flash';
+  const response = await fetch(
+    'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        stream: false,
+        messages: [
+          {
+            role: 'system',
+            content: 'You extract museum artifact metadata from exhibit-label images and return JSON only.',
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image_url',
+                image_url: { url: photoUrl },
+              },
+              {
+                type: 'text',
+                text: `${promptTemplate(rawOcrText)}
+
+Use the image as the source of truth when OCR text appears corrupted. Prefer
+Chinese text visible in the image. If OCR and image disagree, trust clearly
+legible image text over OCR.`,
+              },
+            ],
+          },
+        ],
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Zhipu vision request failed: ${response.status} ${await response.text()}`);
+  }
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content !== 'string') throw new Error('Zhipu vision returned empty content');
   return normalizeInfo(parseJsonObject(content));
 }
 

@@ -282,10 +282,10 @@ export function useExtractArtifactInfo() {
         ),
       );
 
+      await runSync(userId, { pull: false, force: true });
       const { localOcrItems, cloudOcrIds } = await prepareExtractionInput(
         artifact_ids,
       );
-      await runSync(userId, { pull: false, force: true });
 
       const { data, error } = await supabase.functions.invoke('extract-artifact-info', {
         body: {
@@ -311,6 +311,7 @@ export function useExtractArtifactInfo() {
 async function prepareExtractionInput(artifactIds: string[]): Promise<{
   localOcrItems: Array<{
     artifact_id: string;
+    photo_url?: string;
     raw_ocr_text: string;
     ocr_engine: 'mlkit';
   }>;
@@ -318,6 +319,7 @@ async function prepareExtractionInput(artifactIds: string[]): Promise<{
 }> {
   const localOcrItems: Array<{
     artifact_id: string;
+    photo_url?: string;
     raw_ocr_text: string;
     ocr_engine: 'mlkit';
   }> = [];
@@ -333,7 +335,7 @@ async function prepareExtractionInput(artifactIds: string[]): Promise<{
     try {
       const artifact = await getArtifact(artifactId);
       const uri = artifact ? getArtifactPhotoUri(artifact) : null;
-      if (!uri) {
+      if (!artifact || !uri) {
         cloudOcrIds.push(artifactId);
         continue;
       }
@@ -341,6 +343,7 @@ async function prepareExtractionInput(artifactIds: string[]): Promise<{
       const result = await recognizeTextFromImageUri(uri);
       localOcrItems.push({
         artifact_id: artifactId,
+        photo_url: artifact.photo_cloud_url ?? undefined,
         raw_ocr_text: result.text,
         ocr_engine: result.engine,
       });
