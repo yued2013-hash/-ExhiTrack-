@@ -219,19 +219,19 @@ export default function ExhibitionDetailScreen() {
 
   const readArtifactText = async (artifact: ArtifactRow) => {
     try {
-      const text = await readTextMutation.mutateAsync({
+      const updated = await readTextMutation.mutateAsync({
         artifact_id: artifact.id,
         exhibition_id: data.id,
       });
-      setEditingArtifact(artifact);
+      setEditingArtifact(updated);
       setInfoDraft({
-        name: artifact.name ?? '',
-        dynasty: artifact.dynasty ?? '',
-        category: artifact.category ?? '',
-        origin: artifact.origin ?? '',
-        era: artifact.era ?? '',
-        label_description: artifact.label_description || text,
-        raw_ocr_text: text,
+        name: updated.name ?? '',
+        dynasty: updated.dynasty ?? '',
+        category: updated.category ?? '',
+        origin: updated.origin ?? '',
+        era: updated.era ?? '',
+        label_description: updated.label_description ?? '',
+        raw_ocr_text: updated.raw_ocr_text ?? '',
       });
     } catch (e) {
       console.error('[read-artifact-text]', e);

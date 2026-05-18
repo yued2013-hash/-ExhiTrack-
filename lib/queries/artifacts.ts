@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+﻿import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useUserId } from '@/lib/auth';
 import {
@@ -51,7 +51,7 @@ export function useArtifact(id: string | undefined) {
       if (!id) throw new Error('No id');
       try {
         const row = await getArtifact(id);
-        if (!row) throw new Error('文物不存在或已被删除');
+        if (!row) throw new Error('鏂囩墿涓嶅瓨鍦ㄦ垨宸茶鍒犻櫎');
         return row;
       } catch (e) {
         throw toError(e);
@@ -70,7 +70,7 @@ export function useCaptureArtifact() {
       source_photo_uri: string;
       group_id: string;
     }): Promise<Artifact> => {
-      if (!userId) throw new Error('未登录');
+      if (!userId) throw new Error('Not signed in');
       try {
         return await captureArtifact({ user_id: userId, ...input });
       } catch (e) {
@@ -100,7 +100,7 @@ export function useImportArtifacts() {
         longitude?: number | null;
       }>;
     }): Promise<Artifact[]> => {
-      if (!userId) throw new Error('未登录');
+      if (!userId) throw new Error('Not signed in');
       try {
         return await importArtifacts(
           input.photos.map((photo) => ({
@@ -189,25 +189,39 @@ export function useReadArtifactText() {
     }: {
       artifact_id: string;
       exhibition_id: string;
-    }): Promise<string> => {
-      const artifact = await getArtifact(artifact_id);
-      const uri = artifact ? getArtifactPhotoUri(artifact) : null;
-      if (!uri) throw new Error('找不到这张照片');
-
+    }): Promise<ArtifactRow> => {
+      if (!userId) throw new Error('Not signed in');
       try {
         await updateArtifactInfo(artifact_id, {
           extraction_status: 'processing',
           extraction_error: null,
           extraction_updated_at: new Date().toISOString(),
         });
-        const result = await recognizeTextFromImageUri(uri);
-        await updateArtifactInfo(artifact_id, {
-          raw_ocr_text: result.text,
-          extraction_status: 'manual',
-          extraction_error: null,
-          extraction_updated_at: new Date().toISOString(),
+
+        await runSync(userId, { pull: false, force: true });
+        const artifact = await getArtifact(artifact_id);
+        if (!artifact) throw new Error('Artifact not found.');
+        if (!artifact.photo_cloud_url) {
+          throw new Error('Photo has not been uploaded yet. Sync first and retry.');
+        }
+
+        const { data, error } = await supabase.functions.invoke('extract-artifact-info', {
+          body: {
+            items: [
+              {
+                artifact_id,
+                photo_url: artifact.photo_cloud_url,
+              },
+            ],
+          },
         });
-        return result.text;
+        if (error) throw toError(error);
+        assertExtractionSucceeded(data);
+
+        await runSync(userId, { pull: true, force: true });
+        const updated = await getArtifact(artifact_id);
+        if (!updated) throw new Error('Failed to read extraction result.');
+        return updated;
       } catch (e) {
         const error = toError(e);
         await updateArtifactInfo(artifact_id, {
@@ -218,13 +232,10 @@ export function useReadArtifactText() {
         throw error;
       }
     },
-    onSuccess: (_text, { exhibition_id, artifact_id }) => {
+    onSuccess: (_artifact, { exhibition_id, artifact_id }) => {
       qc.invalidateQueries({ queryKey: listKey(exhibition_id) });
       qc.invalidateQueries({ queryKey: detailKey(artifact_id) });
       qc.invalidateQueries({ queryKey: ['sync-status'] });
-      runSync(userId, { pull: false, force: true }).catch((e) =>
-        console.error('[sync] post-read-artifact-text', e),
-      );
     },
   });
 }
@@ -268,7 +279,7 @@ export function useExtractArtifactInfo() {
       exhibition_id: string;
       artifact_ids: string[];
     }): Promise<void> => {
-      if (!userId) throw new Error('未登录');
+      if (!userId) throw new Error('Not signed in');
       if (artifact_ids.length === 0) return;
 
       const now = new Date().toISOString();
@@ -372,10 +383,10 @@ function assertExtractionSucceeded(data: unknown): void {
 
   const firstFailure = failures[0] as { error?: unknown };
   const firstMessage =
-    typeof firstFailure.error === 'string' ? firstFailure.error : '请稍后重试';
+    typeof firstFailure.error === 'string' ? firstFailure.error : 'Please retry later.';
   throw new Error(
     failures.length === results.length
-      ? `识别失败：${firstMessage}`
-      : `部分识别失败：${failures.length}/${results.length} 张未完成。${firstMessage}`,
+      ? `Extraction failed: ${firstMessage}`
+      : `Partial extraction failed: ${failures.length}/${results.length} items failed. ${firstMessage}`,
   );
 }

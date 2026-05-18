@@ -11,6 +11,7 @@ type ExtractRequest = {
 };
 
 type ArtifactInfo = {
+  raw_ocr_text: string | null;
   name: string | null;
   dynasty: string | null;
   category: string | null;
@@ -42,6 +43,7 @@ ${rawOcrText}
 
 Return strict JSON only, with this shape:
 {
+  "raw_ocr_text": string | null,
   "name": string | null,
   "dynasty": string | null,
   "category": string | null,
@@ -73,6 +75,8 @@ Validation rules:
   target, extract the most prominent label only and keep ambiguous fields null.
 - Preserve useful Chinese text from the label.
 - Use null when a field cannot be determined with reasonable confidence.
+- If an image is provided, also return the corrected full Chinese OCR text in
+  raw_ocr_text.
 - Return JSON only. No markdown, no commentary, no reasoning text.
 `;
 
@@ -115,6 +119,7 @@ Deno.serve(async (req) => {
           normalizedOcr.text ?? rawOcrText,
           row.photo_url,
         );
+        const finalOcrText = info.raw_ocr_text ?? normalizedOcr.text ?? rawOcrText;
         const { error } = await supabase
           .from('artifacts')
           .update({
@@ -124,7 +129,7 @@ Deno.serve(async (req) => {
             origin: info.origin,
             era: info.era,
             label_description: info.description,
-            raw_ocr_text: rawOcrText,
+            raw_ocr_text: finalOcrText,
             extraction_status: 'done',
             extraction_error: null,
             extraction_updated_at: new Date().toISOString(),
@@ -212,6 +217,10 @@ async function resolveOcrText(row: {
 }): Promise<string> {
   const localText = row.raw_ocr_text?.trim();
   if (localText) return localText;
+
+  if (row.photo_url && Deno.env.get('AI_VISION_ENABLED') === 'true') {
+    return '';
+  }
 
   if (Deno.env.get('ENABLE_CLOUD_OCR_FALLBACK') !== 'true') {
     throw new Error(
@@ -325,7 +334,8 @@ async function extractInfoWithZhipuVision(
 
 Use the image as the source of truth when OCR text appears corrupted. Prefer
 Chinese text visible in the image. If OCR and image disagree, trust clearly
-legible image text over OCR.`,
+legible image text over OCR. If OCR text is empty, read the visible exhibit
+label directly from the image and return it as raw_ocr_text.`,
               },
             ],
           },
@@ -383,6 +393,7 @@ function parseJsonObject(content: string): unknown {
 function normalizeInfo(value: unknown): ArtifactInfo {
   const row = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   return {
+    raw_ocr_text: normalizeMuseumText(readString(row.raw_ocr_text)).text,
     name: normalizeMuseumText(readString(row.name)).text,
     dynasty: normalizeMuseumText(readString(row.dynasty)).text,
     category: normalizeMuseumText(readString(row.category)).text,
