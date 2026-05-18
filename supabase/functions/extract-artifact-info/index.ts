@@ -26,7 +26,10 @@ const corsHeaders = {
 
 const promptTemplate = (rawOcrText: string) => `
 You are an expert museum label information extractor.
-Extract structured artifact information from the OCR text below.
+The OCR text may contain recognition errors, missing punctuation, broken lines,
+or visually similar character mistakes. Before extracting fields, silently
+validate the text against museum-label conventions and correct only obvious OCR
+noise that is supported by nearby context.
 
 OCR text:
 ${rawOcrText}
@@ -41,11 +44,21 @@ Return strict JSON only, with this shape:
   "description": string | null
 }
 
-Rules:
-- Do not invent missing facts.
+Validation rules:
+- Prefer exact evidence from the OCR text over world knowledge.
+- Correct obvious OCR artifacts such as broken words, stray symbols, duplicated
+  line fragments, and common visual confusions only when context clearly supports
+  the correction.
+- Cross-check consistency: the dynasty, era, category, and description should not
+  contradict each other. If they conflict, keep the better-supported value or use
+  null.
+- Do not infer a famous artifact name, dynasty, or excavation source unless the
+  OCR text directly supports it.
+- If multiple artifacts appear in the OCR text and there is no clear single
+  target, extract the most prominent label only and keep ambiguous fields null.
 - Preserve useful Chinese text from the label.
-- Use null when a field cannot be determined.
-- Return JSON only. No markdown, no commentary.
+- Use null when a field cannot be determined with reasonable confidence.
+- Return JSON only. No markdown, no commentary, no reasoning text.
 `;
 
 Deno.serve(async (req) => {
